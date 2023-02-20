@@ -1,5 +1,0 @@
-https://github.com/matsumotory/ngx_mruby/blob/master/docs/class_and_method/README.md
-https://github.com/mattn/mruby-sqlite3/blob/master/example/example.rb
-
-docker run --name nginx --rm -v $(pwd)/nginx.conf:/usr/local/nginx/conf/nginx.conf -v $(pwd)/mrbs:/usr/local/nginx/conf/mrbs/ -p 8080:80 nginx
-
