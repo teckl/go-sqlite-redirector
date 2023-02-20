@@ -3,69 +3,66 @@ package main
 import (
 	"database/sql"
 	"fmt"
-	"net/http"
-
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 	_ "github.com/mattn/go-sqlite3"
+	"log"
+	"net/http"
 )
+
+//const redirectHttpStatus = http.StatusFound
+const redirectHttpStatus = http.StatusMovedPermanently
+const defaultRedirectURLNotExistHostname = "https://default-redirect-url.example.com"
 
 func main() {
 	e := echo.New()
 
+	e.Debug = true
+
 	e.Use(middleware.Logger())
 	e.Use(middleware.Recover())
 
-	db, err := sql.Open("sqlite3", "./main.db")
-	if err != nil {
-		e.Logger.Fatal(err)
-	}
-	defer db.Close()
+	e.GET("/*", doRedirect)
+	e.HEAD("/*", doRedirect)
 
-	h := NewHandler(db)
-	e.GET("/*", h.Page)
-
-	e.Logger.Fatal(e.Start(":8080"))
+	e.Logger.Fatal(e.Start(":1323"))
 }
 
-type handler struct {
-	db *sql.DB
+func connectDB(hostname string) (*sql.DB, error) {
+	log.Println(fmt.Sprintf("./sqlite/%s.db", hostname))
+	return sql.Open("sqlite3", fmt.Sprintf("./sqlite/%s.db", hostname))
 }
 
-func NewHandler(db *sql.DB) *handler {
-	return &handler{db}
-}
-
-func (h handler) Page(c echo.Context) error {
+func doRedirect(c echo.Context) error {
 	req := c.Request()
-	host, err := searchHostname(h.db, c.Scheme(), req.Host)
+
+	hostname := req.Host
+
+	scheme := c.Scheme()
+	scheme = "https"  // debug only
+
+	host, err := searchHostname(c, scheme, hostname)
 	if err != nil {
-		c.Error(err)
+		c.Logger().Debug("---- searchHostname not found : ", hostname)
+		c.Redirect(http.StatusFound, defaultRedirectURLNotExistHostname)
 		return nil
 	}
 
-	// 該当がない or 無効なので
 	if host == nil || host.isDisabled() {
 		c.NoContent(http.StatusNotFound)
 		return nil
 	}
 
-	// トップのみリダイレクト
-	if host.isTopPageOnly() {
-		c.Redirect(http.StatusFound, host.toHost())
-		return nil
-	}
-
-	p, err := searchPage(h.db, *host, req.URL.Path)
+	p, err := searchPage(c, *host, req.URL.Path, hostname)
 	if err != nil {
 		c.Error(err)
 		return nil
 	}
 
 	if p == nil {
-		c.Redirect(http.StatusFound, host.toHost())
+		c.Redirect(redirectHttpStatus, host.toHost())
 	} else {
-		c.Redirect(http.StatusFound, fmt.Sprintf("%s%s", host.toHost(), *p))
+		c.Redirect(redirectHttpStatus, fmt.Sprintf("%s%s", host.toHost(), *p))
 	}
 	return nil
 }
@@ -89,12 +86,14 @@ func (r ResHostname) isDisabled() bool {
     return r.status == 0
 }
 
-func (r ResHostname) isTopPageOnly() bool {
-    return r.status == 2
-}
+func searchHostname(c echo.Context, scheme, hostname string) (*ResHostname, error) {
+	db, err := connectDB(hostname)
+	if err != nil {
+		c.Logger().Fatal(err)
+	}
+	defer db.Close()
 
-func searchHostname(db *sql.DB, scheme, hostname string) (*ResHostname, error) {
-	stmt, err := db.Prepare("select hostname_id, to_https, to_domain, status from hostname where from_https = ? AND from_domain = ?")
+	stmt, err := db.Prepare("SELECT id, to_https, to_domain, status FROM hostname WHERE from_https = ? AND from_domain = ? AND status = 1")
 	if err != nil {
 		return nil, err
 	}
@@ -104,33 +103,38 @@ func searchHostname(db *sql.DB, scheme, hostname string) (*ResHostname, error) {
 	if scheme == "https" {
 		s = 1
 	}
+
 	var h ResHostname
 	err = stmt.QueryRow(s, hostname).Scan(&h.id, &h.https, &h.domain, &h.status)
 	switch {
-	case err == sql.ErrNoRows:
-		return nil, nil
-	case err != nil:
-		return nil, err
-	default:
-		return &h, nil
+		case err == sql.ErrNoRows:
+			return nil, nil
+		case err != nil:
+			return nil, err
+		default:
+			return &h, nil
 	}
 }
 
-func searchPage(db *sql.DB, h ResHostname, path string) (*string, error) {
-	stmt, err := db.Prepare("select to_path from page where hostname_id = ? AND from_path = ?")
+func searchPage(c echo.Context, h ResHostname, path, hostname string) (*string, error) {
+	db, err := connectDB(hostname)
+
+	stmt, err := db.Prepare("SELECT to_path FROM page WHERE hostname_id = ? AND from_path = ?")
 	if err != nil {
 		return nil, err
 	}
 	defer stmt.Close()
 
 	var toPath string
+
 	err = stmt.QueryRow(h.id, path).Scan(&toPath)
+
 	switch {
-	case err == sql.ErrNoRows:
-		return nil, nil
-	case err != nil:
-		return nil, err
-	default:
-		return &toPath, nil
+		case err == sql.ErrNoRows:
+			return nil, nil
+		case err != nil:
+			return nil, err
+		default:
+			return &toPath, nil
 	}
 }
