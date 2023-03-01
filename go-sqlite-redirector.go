@@ -118,6 +118,10 @@ func searchHostname(c echo.Context, scheme, hostname string) (*ResHostname, erro
 
 func searchPage(c echo.Context, h ResHostname, path, hostname string) (*string, error) {
 	db, err := connectDB(hostname)
+	if err != nil {
+		c.Logger().Fatal(err)
+	}
+	defer db.Close()
 
 	stmt, err := db.Prepare("SELECT to_path FROM page WHERE hostname_id = ? AND from_path = ?")
 	if err != nil {
